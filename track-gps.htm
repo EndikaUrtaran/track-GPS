@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Track-GPS</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+        }
+        #map { 
+            height: 100vh; 
+            width: 100vw;
+        }
+        .control-panel { 
+            position: fixed; 
+            top: 10px; 
+            right: 10px; 
+            background: rgba(255, 255, 255, 0.85);
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            z-index: 1000;
+            width: 220px;
+            backdrop-filter: blur(2px);
+        }
+        .coordenadas { 
+            font-size: 12px;
+            margin-bottom: 8px;
+        }
+        .blue-dot { 
+            background: #2196F3; 
+            width: 14px; 
+            height: 14px; 
+            border-radius: 50%; 
+            border: 2px solid white;
+            box-shadow: 0 0 5px rgba(0,0,0,0.3);
+        }
+        .small-button {
+            font-size: 12px;
+            padding: 4px 8px;
+            margin: 2px 0;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="control-panel">
+        <div class="coordenadas" id="coords">Cargando posición...</div>
+        <button class="small-button" id="start">▶ Iniciar</button>
+        <button class="small-button" id="stop" disabled>⏹ Detener</button>
+        <input type="file" id="gpx-file" accept=".gpx" style="display: none;">
+        <button class="small-button" onclick="document.getElementById('gpx-file').click()">📂 Cargar GPX</button>
+        <a id="download" style="display:none;" class="small-button">⬇ Descargar GPX</a>
+    </div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/gpx.min.js"></script>
+    <script>
+        let map;
+        let track = [];
+        let polyline = null;
+        let watchId = null;
+        let currentLocationMarker = null;
+        let isRecording = false;
+        let lastCenteredPixel = null;
+        const RECENTER_DISTANCE = 30; // Distancia en píxeles para re-centrar
+        let gpxLayers = [];
+
+        const blueDotIcon = L.divIcon({
+            className: 'blue-dot',
+            iconSize: [14, 14]
+        });
+
+        // Verificar distancia desde el último centro
+        function checkDistanceFromCenter() {
+            if (!currentLocationMarker || !map) return;
+
+            const currentPos = currentLocationMarker.getLatLng();
+            const currentPixel = map.latLngToContainerPoint(currentPos);
+
+            if (!lastCenteredPixel) {
+                lastCenteredPixel = currentPixel;
+                return;
+            }
+
+            const distance = Math.sqrt(
+                Math.pow(currentPixel.x - lastCenteredPixel.x, 2) +
+                Math.pow(currentPixel.y - lastCenteredPixel.y, 2)
+            );
+
+            if (distance >= RECENTER_DISTANCE) {
+                recenterMap();
+            }
+        }
+
+        // Reenfoque suave del mapa
+        function recenterMap() {
+            if (!currentLocationMarker) return;
+            
+            const currentPos = currentLocationMarker.getLatLng();
+            
+            map.setView(currentPos, map.getZoom(), {
+                animate: true,
+                duration: 1.5,
+                easeLinearity: 0.25
+            });
+
+            // Actualizar la posición de referencia
+            lastCenteredPixel = map.latLngToContainerPoint(currentPos);
+        }
+
+        // Inicialización del mapa
+        function initMap(position) {
+            map = L.map('map', {
+                center: [position.coords.latitude, position.coords.longitude],
+                zoom: 15,
+                zoomControl: false
+            });
+
+            L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+                attribution: 'Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)',
+                maxZoom: 17,
+                subdomains: 'abc'
+            }).addTo(map);
+
+            currentLocationMarker = L.marker(
+                [position.coords.latitude, position.coords.longitude],
+                { icon: blueDotIcon, zIndexOffset: 1000 }
+            ).addTo(map);
+
+            // Inicializar posición de referencia
+            lastCenteredPixel = map.latLngToContainerPoint(currentLocationMarker.getLatLng());
+
+            // Verificar distancia cada 5 segundos
+            setInterval(checkDistanceFromCenter, 5000);
+        }
+
+        // Actualización de posición
+        function updatePosition(position) {
+            const lat = position.coords.latitude;
+            const lon = position.coords.longitude;
+            
+            currentLocationMarker.setLatLng([lat, lon]);
+            document.getElementById('coords').textContent = 
+                `Lat: ${lat.toFixed(6)}\nLon: ${lon.toFixed(6)}`;
+            
+            if (isRecording) {
+                track.push([lat, lon]);
+                updatePolyline();
+            }
+        }
+
+        // Actualizar la línea del track
+        function updatePolyline() {
+            if (polyline) map.removeLayer(polyline);
+            polyline = L.polyline(track, {
+                color: '#ff0000',
+                weight: 4,
+                lineJoin: 'round'
+            }).addTo(map);
+        }
+
+        // Cargar archivo GPX
+        document.getElementById('gpx-file').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const gpxLayer = new L.GPX(event.target.result, {
+                    async: true,
+                    marker_options: {
+                        startIconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/pin-icon-start.png',
+                        endIconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/pin-icon-end.png',
+                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/pin-shadow.png'
+                    }
+                }).on('loaded', function(e) {
+                    map.fitBounds(e.target.getBounds());
+                    gpxLayers.push(e.target);
+                }).addTo(map);
+            };
+            reader.readAsText(file);
+        });
+
+        // Controles de grabación
+        document.getElementById('start').addEventListener('click', () => {
+            isRecording = true;
+            track = [];
+            document.getElementById('start').disabled = true;
+            document.getElementById('stop').disabled = false;
+            document.getElementById('download').style.display = 'none';
+        });
+
+        document.getElementById('stop').addEventListener('click', () => {
+            isRecording = false;
+            document.getElementById('start').disabled = false;
+            document.getElementById('stop').disabled = true;
+            document.getElementById('download').style.display = 'inline';
+            
+            const gpxContent = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GPS Tracker">
+    <trk><name>${new Date().toLocaleString()}</name><trkseg>
+    ${track.map(p => `<trkpt lat="${p[0]}" lon="${p[1]}"><ele>0</ele></trkpt>`).join('')}
+    </trkseg></trk>
+</gpx>`;
+            
+            const blob = new Blob([gpxContent], {type: 'application/gpx+xml'});
+            document.getElementById('download').href = URL.createObjectURL(blob);
+            document.getElementById('download').download = `track-${Date.now()}.gpx`;
+        });
+
+        // Solicitar permisos y configurar seguimiento en segundo plano
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js')
+                .then(registration => {
+                    console.log('Service Worker registrado');
+                });
+        }
+
+        navigator.geolocation.getCurrentPosition(
+            (position) => initMap(position),
+            (error) => {
+                console.error('Error al obtener ubicación:', error);
+                document.getElementById('coords').textContent = 'Error: Permiso de ubicación denegado';
+            },
+            { 
+                enableHighAccuracy: true,
+                maximumAge: 0,
+                timeout: 5000
+            }
+        );
+
+        watchId = navigator.geolocation.watchPosition(
+            (position) => updatePosition(position),
+            (error) => console.error('Error:', error),
+            { 
+                enableHighAccuracy: true,
+                maximumAge: 0,
+                timeout: 5000
+            }
+        );
+    </script>
+</body>
+</html>
