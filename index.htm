@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Track-GPS</title>
+    <title>Track-GPS </title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <style>
         html, body {
@@ -20,15 +20,15 @@
             position: fixed; 
             top: 10px; 
             right: 10px; 
-            background: rgba(255, 255, 255, 0.7); /* Mayor transparencia */
+            background: rgba(255, 255, 255, 0.7);
             padding: 8px;
             border-radius: 6px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.2);
             z-index: 1000;
-            width: 30%; /* Un tercio del ancho actual */
-            min-width: 100px; /* Ancho mínimo para que no se vea mal */
+            width: 30%;
+            min-width: 100px;
             font-size: 12px;
-            backdrop-filter: blur(3px); /* Efecto de desenfoque */
+            backdrop-filter: blur(3px);
         }
         .coordenadas { 
             display: flex;
@@ -36,13 +36,28 @@
             gap: 2px;
             margin-bottom: 6px;
         }
-        .blue-dot { 
-            background: #2196F3; 
-            width: 14px; 
-            height: 14px; 
-            border-radius: 50%; 
+        .blue-dot {
+            position: relative;
+            background: #2196F3;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
             border: 2px solid white;
             box-shadow: 0 0 5px rgba(0,0,0,0.3);
+        }
+        .direction-arrow {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-bottom: 12px solid #2196F3;
+            transform-origin: center bottom;
+            transform: translate(-50%, -50%);
+            filter: drop-shadow(0 1px 1px rgba(0,0,0,0.3));
+            transition: transform 0.1s ease;
         }
         .small-button {
             font-size: 12px;
@@ -54,19 +69,19 @@
             position: fixed;
             bottom: 10px;
             right: 10px;
-            background: rgba(255, 255, 255, 0.7); /* Mayor transparencia */
+            background: rgba(255, 255, 255, 0.7);
             padding: 4px 8px;
             border-radius: 4px;
             font-size: 10px;
             z-index: 1000;
             box-shadow: 0 1px 4px rgba(0,0,0,0.2);
-            backdrop-filter: blur(3px); /* Efecto de desenfoque */
+            backdrop-filter: blur(3px);
         }
     </style>
 </head>
 <body>
     <div class="control-panel">
-         <div class="panel-title">Track-GPS</div>
+        <div class="panel-title">Track-GPS</div>
         <div class="coordenadas">
             <span>Lat: <span id="lat">-</span></span>
             <span>Lon: <span id="lon">-</span></span>
@@ -77,7 +92,7 @@
         <button class="small-button" onclick="document.getElementById('gpx-file').click()">📂 GPX</button>
         <a id="download" style="display:none;" class="small-button">⬇ Download</a>
     </div>
-    <div class="map-credits" id="mapCredits">Layer: OpenTopoMap</div>
+    <div class="map-credits" id="mapCredits">Capa: OpenTopoMap</div>
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
@@ -91,51 +106,130 @@
         let isRecording = false;
         let lastCenteredPixel = null;
         let lastMoveTime = Date.now();
-        const RECENTER_DISTANCE = 30; // Distancia en píxeles para re-centrar
-        const RECENTER_DELAY = 5000; // 5 segundos de inactividad para re-centrar
+        let isDragging = false;
+        let currentHeading = 0;
+        const RECENTER_DISTANCE = 30;
+        const RECENTER_DELAY = 5000;
 
-        // Capas de mapa
-        const openTopoMap = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
-            attribution: 'Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)',
-            maxZoom: 17, // Límite de zoom para OpenTopoMap
-            subdomains: 'abc'
+        // Capas base
+        const baseLayers = {
+            "OpenTopoMap": L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+                attribution: 'Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)',
+                maxZoom: 17,
+                subdomains: 'abc'
+            }),
+            "OpenStreetMap": L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 19
+            }),
+            "IGN Mapa": L.tileLayer('https://www.ign.es/wmts/mapa-raster?request=GetTile&layer=MTN&style=default&tilematrixset=GoogleMapsCompatible&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/jpeg&TileMatrix={z}&TileCol={x}&TileRow={y}', {
+                maxZoom: 18,
+                attribution: '© Instituto Geográfico Nacional de España',
+                bounds: [[27.433542, -18.393684], [43.993308, 4.556944]]
+            })
+        };
+
+        // Capa de calor Strava
+        const stravaHeatmap = L.tileLayer('https://proxy.nakarte.me/https/heatmap-external-a.strava.com/tiles-auth/all/hot/{z}/{x}/{y}.png?px=256', {
+            attribution: 'Heatmap © Strava',
+            opacity: 0.5,
+            maxZoom: 17,
+            pane: 'overlayPane'
         });
 
-        const openStreetMap = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap contributors',
-            maxZoom: 19 // Límite de zoom para OpenStreetMap
-        });
+        const overlays = {
+            "Strava Heatmap": stravaHeatmap
+        };
 
         const blueDotIcon = L.divIcon({
             className: 'blue-dot',
-            iconSize: [14, 14]
+            iconSize: [16, 16],
+            html: '<div class="direction-arrow"></div>'
         });
 
-        // Cambiar capa según el nivel de zoom
-        function updateMapLayer() {
-            const currentZoom = map.getZoom();
-            if (currentZoom > 17) {
-                if (map.hasLayer(openTopoMap)) {
-                    map.removeLayer(openTopoMap);
-                }
-                if (!map.hasLayer(openStreetMap)) {
-                    openStreetMap.addTo(map);
-                }
-                document.getElementById('mapCredits').textContent = 'Capa: OpenStreetMap';
-            } else {
-                if (map.hasLayer(openStreetMap)) {
-                    map.removeLayer(openStreetMap);
-                }
-                if (!map.hasLayer(openTopoMap)) {
-                    openTopoMap.addTo(map);
-                }
-                document.getElementById('mapCredits').textContent = 'Capa: OpenTopoMap';
+        // Manejar orientación del dispositivo
+        function handleOrientation(event) {
+            if (event.alpha !== null && currentLocationMarker) {
+                currentHeading = event.alpha;
+                const arrow = currentLocationMarker.getElement().querySelector('.direction-arrow');
+                const adjustedHeading = 360 - currentHeading; // Ajuste para alinear con norte verdadero
+                arrow.style.transform = `translate(-50%, -50%) rotate(${adjustedHeading}deg)`;
             }
         }
 
-        // Verificar distancia desde el último centro
+        // Solicitar permisos de orientación
+        function requestOrientationPermission() {
+            if (typeof DeviceOrientationEvent !== 'undefined' && 
+                typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            window.addEventListener('deviceorientation', handleOrientation);
+                        }
+                    })
+                    .catch(console.error);
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation);
+            }
+        }
+
+        // Inicialización del mapa
+        function initMap(position) {
+            map = L.map('map', {
+                center: [position.coords.latitude, position.coords.longitude],
+                zoom: 15,
+                zoomControl: false
+            });
+
+            // Control de capas
+            L.control.layers(baseLayers, overlays, {
+                position: 'bottomright',
+                collapsed: true
+            }).addTo(map);
+
+            // Eventos de arrastre
+            map.on('dragstart', () => {
+                isDragging = true;
+                lastMoveTime = Date.now();
+            });
+
+            map.on('dragend', () => {
+                isDragging = false;
+                lastMoveTime = Date.now();
+            });
+
+            // Capa inicial
+            baseLayers.OpenTopoMap.addTo(map);
+
+            // Actualizar créditos
+            map.on('baselayerchange', (e) => {
+                document.getElementById('mapCredits').textContent = `Capa: ${e.name}`;
+            });
+
+            // Marcador de posición
+            currentLocationMarker = L.marker(
+                [position.coords.latitude, position.coords.longitude],
+                { icon: blueDotIcon, zIndexOffset: 1000 }
+            ).addTo(map);
+
+            lastCenteredPixel = map.latLngToContainerPoint(currentLocationMarker.getLatLng());
+
+            // Seguimiento GPS
+            watchId = navigator.geolocation.watchPosition(
+                (pos) => updatePosition(pos),
+                (err) => console.error('Error:', err),
+                { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+            );
+
+            // Solicitar permisos de orientación
+            requestOrientationPermission();
+
+            // Verificar posición periódicamente
+            setInterval(checkDistanceFromCenter, 1000);
+        }
+
         function checkDistanceFromCenter() {
-            if (!currentLocationMarker || !map) return;
+            if (!currentLocationMarker || !map || isDragging) return;
 
             const currentPos = currentLocationMarker.getLatLng();
             const currentPixel = map.latLngToContainerPoint(currentPos);
@@ -155,60 +249,19 @@
             }
         }
 
-        // Reenfoque suave del mapa
         function recenterMap() {
             if (!currentLocationMarker) return;
             
             const currentPos = currentLocationMarker.getLatLng();
-            
             map.setView(currentPos, map.getZoom(), {
                 animate: true,
                 duration: 1.5,
                 easeLinearity: 0.25
             });
 
-            // Actualizar la posición de referencia
             lastCenteredPixel = map.latLngToContainerPoint(currentPos);
         }
 
-        // Inicialización del mapa
-        function initMap(position) {
-            map = L.map('map', {
-                center: [position.coords.latitude, position.coords.longitude],
-                zoom: 15,
-                zoomControl: false
-            });
-
-            // Eventos de movimiento del mapa
-            map.on('movestart', () => {
-                lastMoveTime = Date.now();
-            });
-
-            // Cambiar capa cuando cambia el zoom
-            map.on('zoomend', updateMapLayer);
-
-            // Añadir capa inicial
-            openTopoMap.addTo(map);
-
-            currentLocationMarker = L.marker(
-                [position.coords.latitude, position.coords.longitude],
-                { icon: blueDotIcon, zIndexOffset: 1000 }
-            ).addTo(map);
-
-            // Inicializar posición de referencia
-            lastCenteredPixel = map.latLngToContainerPoint(currentLocationMarker.getLatLng());
-
-            watchId = navigator.geolocation.watchPosition(
-                (position) => updatePosition(position),
-                (error) => console.error('Error:', error),
-                { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
-            );
-
-            // Verificar distancia periódicamente
-            setInterval(checkDistanceFromCenter, 1000);
-        }
-
-        // Actualización de posición
         function updatePosition(position) {
             const lat = position.coords.latitude;
             const lon = position.coords.longitude;
@@ -223,7 +276,6 @@
             }
         }
 
-        // Actualizar la línea del track
         function updatePolyline() {
             if (polyline) map.removeLayer(polyline);
             polyline = L.polyline(track, {
@@ -233,21 +285,21 @@
             }).addTo(map);
         }
 
-        // Cargar archivo GPX
+        // Manejo de GPX
         document.getElementById('gpx-file').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
 
             const reader = new FileReader();
-            reader.onload = function(event) {
-                const gpxLayer = new L.GPX(event.target.result, {
+            reader.onload = (event) => {
+                new L.GPX(event.target.result, {
                     async: true,
                     marker_options: {
                         startIconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/pin-icon-start.png',
                         endIconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/pin-icon-end.png',
                         shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/pin-shadow.png'
                     }
-                }).on('loaded', function(e) {
+                }).on('loaded', (e) => {
                     map.fitBounds(e.target.getBounds());
                 }).addTo(map);
             };
@@ -281,18 +333,14 @@
             document.getElementById('download').download = `track-${Date.now()}.gpx`;
         });
 
-        // Solicitar permisos y configurar seguimiento en segundo plano
+        // Iniciar aplicación
         navigator.geolocation.getCurrentPosition(
-            (position) => initMap(position),
-            (error) => {
-                console.error('Error al obtener ubicación:', error);
-                document.getElementById('coords').textContent = 'Error: Permiso de ubicación denegado';
+            (pos) => initMap(pos),
+            (err) => {
+                console.error('Error:', err);
+                document.getElementById('coordenadas').textContent = 'Error: Permiso denegado';
             },
-            { 
-                enableHighAccuracy: true,
-                maximumAge: 0,
-                timeout: 5000
-            }
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
         );
     </script>
 </body>
