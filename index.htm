@@ -150,7 +150,7 @@
                 hasCompass = true;
                 currentHeading = event.alpha;
                 const arrow = currentLocationMarker.getElement().querySelector('.direction-arrow');
-                const adjustedHeading = 360-currentHeading; // Ajuste para alinear con norte verdadero
+                const adjustedHeading = 390-currentHeading; // Ajuste para alinear con norte verdadero
                 arrow.style.transform = `translate(-50%, -50%) rotate(${adjustedHeading}deg)`;
             }
         }
