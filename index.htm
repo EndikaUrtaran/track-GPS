@@ -150,7 +150,7 @@
                 hasCompass = true;
                 currentHeading = event.alpha;
                 const arrow = currentLocationMarker.getElement().querySelector('.direction-arrow');
-                const adjustedHeading = 720-currentHeading; // Ajuste para alinear con norte verdadero
+                const adjustedHeading = 720 - currentHeading; // Ajuste para alinear con norte verdadero
                 arrow.style.transform = `translate(-50%, -50%) rotate(${adjustedHeading}deg)`;
             }
         }
@@ -336,7 +336,15 @@
             (pos) => initMap(pos),
             (err) => {
                 console.error('Error:', err);
-                document.getElementById('coordenadas').textContent = 'Error: Permiso denegado';
+                if (err.code === err.PERMISSION_DENIED) {
+                    alert("Location access is denied. Please enable location services in your device settings.");
+                } else if (err.code === err.POSITION_UNAVAILABLE) {
+                    alert("Location information is unavailable. Please check your device settings.");
+                } else if (err.code === err.TIMEOUT) {
+                    alert("The request to get user location timed out. Please try again.");
+                } else {
+                    alert("An unknown error occurred. Please try again.");
+                }
             },
             { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
         );
